@@ -32,19 +32,22 @@
     /* Lightbox (전체 보기) */
     .lightbox { position: fixed; inset: 0; display: none; place-items: center; background: color-mix(in oklab, black 70%, transparent); }
     .lightbox.open { display: grid; }
+    .lightbox .box { display:flex; flex-direction:column; align-items:center; gap:8px; }
     .lightbox img { max-width: 95vw; max-height: 85vh; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+    .lightbox .meta { color:#fff; font-size:12px; opacity:.9; text-align:center; }
     .close { position: fixed; top: 12px; right: 12px; background: #000; color:#fff; border:none; border-radius:10px; padding:8px 10px; opacity:.75; cursor:pointer; }
   </style>
 </head>
 <body>
   <header>
     <div class="wrap">
-      <h1>동호회 소식지 뷰어 (JSON 기반 목록 → 전체 이미지)</h1>
+      <h1>동호회 소식지 뷰어 (JSON 목록 → 클릭 시 팝업)</h1>
     </div>
   </header>
 
   <main class="wrap viewer">
-    <div class="stage" id="stage" hidden>
+    <!-- 원한다면 이 stage를 감추고 팝업만 쓰세요 (id="stage"에 hidden 추가) -->
+    <div class="stage" id="stage">
       <img id="mainImg" alt="선택된 소식지" />
       <div id="caption" class="caption"></div>
     </div>
@@ -55,21 +58,24 @@
 
   <div id="lightbox" class="lightbox" aria-hidden="true">
     <button class="close" aria-label="닫기">닫기 ✕</button>
-    <img id="lightImg" alt="전체 보기" />
+    <div class="box">
+      <img id="lightImg" alt="전체 보기" />
+      <div id="lightMeta" class="meta"></div>
+    </div>
   </div>
 
   <div class="footer">
-    images/ 폴더의 JSON들을 읽어 <code>created_at</code> 역순으로 리스트를 만들고, 클릭 시 원본 이미지를 전체로 보여줍니다.
+    images/ 폴더의 JSON들을 읽어 <code>created_at</code> 역순으로 리스트를 만들고, 항목 클릭 시 원본 이미지를 팝업으로 보여줍니다.
   </div>
 
   <script>
     // 🔧 레포 설정: 본인 값으로 교체하세요
     const CONFIG = {
-      owner: "jcwon989",           // GitHub 사용자/조직명
-      repo: "release",             // 레포 이름
-      branch: "main",              // main 또는 gh-pages 등
-      imageDir: "images",          // JSON이 들어있는 폴더
-      thumbDir: "images/thumbnails", // 썸네일 폴더 (thumb_*.ext)
+      owner: "jcwon989",              // GitHub 사용자/조직명
+      repo: "release",                // 레포 이름
+      branch: "main",                 // main 또는 gh-pages 등
+      imageDir: "images",             // JSON이 들어있는 폴더
+      thumbDir: "images/thumbnails",  // 썸네일 폴더 (thumb_*.ext)
       cacheMinutes: 10
     };
 
@@ -80,17 +86,27 @@
     const mainImg = $('#mainImg');
     const caption = $('#caption');
 
-    // Lightbox
-    const lb = { el: $('#lightbox'), img: $('#lightImg') };
+    const lb = { el: $('#lightbox'), img: $('#lightImg'), meta: $('#lightMeta') };
     document.querySelector('.close').addEventListener('click', closeLightbox);
     lb.el.addEventListener('click', (e) => { if (e.target === lb.el) closeLightbox(); });
     window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
 
-    function openLightbox(src){ lb.img.src = src; lb.el.classList.add('open'); lb.el.setAttribute('aria-hidden','false'); }
-    function closeLightbox(){ lb.el.classList.remove('open'); lb.el.setAttribute('aria-hidden','true'); lb.img.src = ''; }
+    function openLightbox(src, metaText){
+      lb.img.src = src;
+      lb.meta.textContent = metaText || '';
+      lb.el.classList.add('open');
+      lb.el.setAttribute('aria-hidden','false');
+    }
+    function closeLightbox(){
+      lb.el.classList.remove('open');
+      lb.el.setAttribute('aria-hidden','true');
+      lb.img.src = '';
+      lb.meta.textContent = '';
+    }
 
-    // Helpers
-    const apiDir = (dir) => `https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}/contents/${encodeURIComponent(dir)}?ref=${CONFIG.branch}`;
+    // API 디렉토리 URL
+    const apiDir = (dir) =>
+      `https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}/contents/${encodeURIComponent(dir)}?ref=${CONFIG.branch}`;
 
     // ✅ 경로 세그먼트별 인코딩(한글/공백 파일명 대응)
     function rawUrl(path) {
@@ -113,7 +129,6 @@
         parseInt(s, 10)
       );
     }
-
     function sortByCreatedAtDesc(arr) {
       return [...arr].sort((a, b) => {
         const da = parseCreatedAt(a.created_at || a.date_str);
@@ -153,18 +168,22 @@
           if (!jr.ok) return null;
           const j = await jr.json();
 
-          // JSON 스키마:
-          // article_title, newspaper_name, date_str, article_content, image_filename (thumb_*), created_at (YYYYMMDD_HHMMSS)
-          const thumbName = (j.image_filename || "").trim();
-          if (!thumbName) return null;
+          // JSON의 image_filename 은 "원본 파일명" (예: "a.png")
+          const baseName = (j.image_filename || "").trim();
+          if (!baseName) return null;
 
-          const fullName  = thumbName.replace(/^thumb_/i, "");
+          // 썸네일 파일명은 항상 "thumb_" 접두어
+          const thumbName = "thumb_" + baseName;
+
+          // 경로 만들기
+          const thumbPath = `${CONFIG.thumbDir}/${thumbName}`;
+          const fullPath  = `${CONFIG.imageDir}/${baseName}`;
 
           return {
             ...j,
             _json_name: f.name,
-            thumb_url: rawUrl(`${CONFIG.thumbDir}/${thumbName}`),
-            full_url:  rawUrl(`${CONFIG.imageDir}/${fullName}`)
+            thumb_url: rawUrl(thumbPath),
+            full_url:  rawUrl(fullPath)
           };
         } catch { return null; }
       }));
@@ -188,29 +207,39 @@
         const row = document.createElement('div');
         row.className = 'item';
         row.innerHTML = `
-          <div class="thumb"><img loading="lazy" decoding="async" src="${it.thumb_url}" alt="${escapeHtml(it.article_title || it._json_name)}"></div>
+          <div class="thumb">
+            <img loading="lazy" decoding="async" src="${it.thumb_url}" alt="${escapeHtml(it.article_title || it._json_name)}">
+          </div>
           <div class="meta">
             <div class="title">${escapeHtml(it.article_title || '(제목 없음)')}</div>
             <div class="sub">${escapeHtml(it.newspaper_name || '')} · ${escapeHtml(it.date_str || '')}</div>
           </div>
           <button class="openbtn" type="button">보기</button>
         `;
+
+        // ✅ 썸네일 로딩 실패 시 자동 폴백(원본으로 대체)
+        const imgEl = row.querySelector('img');
+        imgEl.addEventListener('error', () => {
+          imgEl.src = it.full_url;
+        }, { once: true });
+
+        // 리스트 클릭 → 곧바로 팝업(원본)
         row.addEventListener('click', (e)=>{
           if (e.target.closest('.openbtn') || e.currentTarget === row){
-            showStage(it);
+            // 스테이지도 업데이트(원하면 stage.hidden = true로 숨길 수 있음)
+            stage.hidden = false;
+            mainImg.src = it.full_url;
+            mainImg.alt = it.article_title || '';
+            caption.textContent = it.article_title || '';
+
+            const metaText = [it.article_title, it.newspaper_name, it.date_str].filter(Boolean).join(' · ');
+            openLightbox(it.full_url, metaText);
           }
         });
+
         frag.appendChild(row);
       });
       listEl.appendChild(frag);
-    }
-
-    function showStage(it){
-      stage.hidden = false;
-      mainImg.src = it.full_url;
-      mainImg.alt = it.article_title || '';
-      caption.textContent = it.article_title || '';
-      mainImg.onclick = () => openLightbox(it.full_url);
     }
 
     async function boot(){
