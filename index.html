@@ -13,10 +13,6 @@
     h1 { font-size:18px; margin:0; }
 
     .viewer { display:grid; gap:14px; padding: 16px; }
-    .stage { display:grid; place-items:center; border:1px solid color-mix(in oklab, CanvasText 20%, transparent); border-radius:14px; padding:10px; background: color-mix(in oklab, Canvas, CanvasText 3%/8%); min-height: 420px; }
-    .stage img { max-width: 100%; max-height: 70vh; height:auto; border-radius: 10px; display:block; }
-    .caption { text-align:center; font-size:12px; opacity:.8; margin-top:6px; }
-
     .list { display:grid; gap:10px; }
     .item { display:grid; grid-template-columns: 120px 1fr auto; gap:12px; align-items:center; padding:10px; border:1px solid color-mix(in oklab, CanvasText 20%, transparent); border-radius:12px; background: color-mix(in oklab, Canvas, CanvasText 2%/6%); cursor:pointer; }
     .thumb { width:120px; height:76px; border-radius:10px; overflow:hidden; border:1px solid color-mix(in oklab, CanvasText 18%, transparent); }
@@ -29,10 +25,10 @@
     .empty { text-align:center; padding: 40px 0; opacity:.7; }
     .footer { text-align:center; padding: 16px; font-size:12px; opacity:.7; }
 
-    /* Lightbox (전체 보기) */
-    .lightbox { position: fixed; inset: 0; display: none; place-items: center; background: color-mix(in oklab, black 70%, transparent); }
+    /* Lightbox (팝업) */
+    .lightbox { position: fixed; inset: 0; display: none; place-items: center; background: color-mix(in oklab, black 70%, transparent); z-index: 9999; }
     .lightbox.open { display: grid; }
-    .lightbox .box { display:flex; flex-direction:column; align-items:center; gap:8px; }
+    .lightbox .box { display:flex; flex-direction:column; align-items:center; gap:8px; padding: 8px; }
     .lightbox img { max-width: 95vw; max-height: 85vh; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
     .lightbox .meta { color:#fff; font-size:12px; opacity:.9; text-align:center; }
     .close { position: fixed; top: 12px; right: 12px; background: #000; color:#fff; border:none; border-radius:10px; padding:8px 10px; opacity:.75; cursor:pointer; }
@@ -46,12 +42,6 @@
   </header>
 
   <main class="wrap viewer">
-    <!-- 원한다면 이 stage를 감추고 팝업만 쓰세요 (id="stage"에 hidden 추가) -->
-    <div class="stage" id="stage">
-      <img id="mainImg" alt="선택된 소식지" />
-      <div id="caption" class="caption"></div>
-    </div>
-
     <div id="empty" class="empty">목록을 불러오는 중…</div>
     <div id="list" class="list" hidden></div>
   </main>
@@ -82,13 +72,13 @@
     const $ = (s) => document.querySelector(s);
     const listEl = $('#list');
     const empty = $('#empty');
-    const stage = $('#stage');
-    const mainImg = $('#mainImg');
-    const caption = $('#caption');
 
     const lb = { el: $('#lightbox'), img: $('#lightImg'), meta: $('#lightMeta') };
-    document.querySelector('.close').addEventListener('click', closeLightbox);
-    lb.el.addEventListener('click', (e) => { if (e.target === lb.el) closeLightbox(); });
+    const closeBtn = document.querySelector('.close');
+
+    // 팝업 어디든 클릭하면 닫힘 (버튼 포함)
+    lb.el.addEventListener('click', closeLightbox);
+    closeBtn.addEventListener('click', (e)=>{ e.stopPropagation(); closeLightbox(); });
     window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
 
     function openLightbox(src, metaText){
@@ -96,12 +86,14 @@
       lb.meta.textContent = metaText || '';
       lb.el.classList.add('open');
       lb.el.setAttribute('aria-hidden','false');
+      document.body.style.overflow = 'hidden';
     }
     function closeLightbox(){
       lb.el.classList.remove('open');
       lb.el.setAttribute('aria-hidden','true');
       lb.img.src = '';
       lb.meta.textContent = '';
+      document.body.style.overflow = '';
     }
 
     // API 디렉토리 URL
@@ -120,14 +112,7 @@
       const m = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(str);
       if (!m) return new Date(0);
       const [_, y, mo, d, h, mi, s] = m;
-      return new Date(
-        parseInt(y, 10),
-        parseInt(mo, 10) - 1,
-        parseInt(d, 10),
-        parseInt(h, 10),
-        parseInt(mi, 10),
-        parseInt(s, 10)
-      );
+      return new Date(+y, +mo - 1, +d, +h, +mi, +s);
     }
     function sortByCreatedAtDesc(arr) {
       return [...arr].sort((a, b) => {
@@ -219,19 +204,11 @@
 
         // ✅ 썸네일 로딩 실패 시 자동 폴백(원본으로 대체)
         const imgEl = row.querySelector('img');
-        imgEl.addEventListener('error', () => {
-          imgEl.src = it.full_url;
-        }, { once: true });
+        imgEl.addEventListener('error', () => { imgEl.src = it.full_url; }, { once: true });
 
-        // 리스트 클릭 → 곧바로 팝업(원본)
+        // 리스트 클릭 → 바로 팝업(원본)
         row.addEventListener('click', (e)=>{
           if (e.target.closest('.openbtn') || e.currentTarget === row){
-            // 스테이지도 업데이트(원하면 stage.hidden = true로 숨길 수 있음)
-            stage.hidden = false;
-            mainImg.src = it.full_url;
-            mainImg.alt = it.article_title || '';
-            caption.textContent = it.article_title || '';
-
             const metaText = [it.article_title, it.newspaper_name, it.date_str].filter(Boolean).join(' · ');
             openLightbox(it.full_url, metaText);
           }
