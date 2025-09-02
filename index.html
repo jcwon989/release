@@ -1,0 +1,186 @@
+<!DOCTYPE html><html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>동호회 소식지 뷰어 (JSON 기반)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif; }
+    header { position: sticky; top:0; z-index:10; backdrop-filter: blur(6px); background: color-mix(in oklab, Canvas, CanvasText 6%/10%); border-bottom: 1px solid color-mix(in oklab, CanvasText 25%, transparent); }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 14px 16px; }
+    h1 { font-size:18px; margin:0; }.viewer { display:grid; gap:14px; padding: 16px; }
+.stage { display:grid; place-items:center; border:1px solid color-mix(in oklab, CanvasText 20%, transparent); border-radius:14px; padding:10px; background: color-mix(in oklab, Canvas, CanvasText 3%/8%); min-height: 420px; }
+.stage img { max-width: 100%; max-height: 70vh; height:auto; border-radius: 10px; display:block; }
+.caption { text-align:center; font-size:12px; opacity:.8; margin-top:6px; }
+
+.list { display:grid; gap:10px; }
+.item { display:grid; grid-template-columns: 120px 1fr auto; gap:12px; align-items:center; padding:10px; border:1px solid color-mix(in oklab, CanvasText 20%, transparent); border-radius:12px; background: color-mix(in oklab, Canvas, CanvasText 2%/6%); cursor:pointer; }
+.thumb { width:120px; height:76px; border-radius:10px; overflow:hidden; border:1px solid color-mix(in oklab, CanvasText 18%, transparent); }
+.thumb img { width:100%; height:100%; object-fit:cover; display:block; }
+.meta { display:flex; flex-direction:column; gap:4px; }
+.title { font-size:14px; font-weight:600; line-height:1.2; }
+.sub { font-size:12px; opacity:.7; }
+.openbtn { padding:6px 10px; border-radius:10px; border:1px solid color-mix(in oklab, CanvasText 25%, transparent); background: Field; color: FieldText; }
+
+.empty { text-align:center; padding: 40px 0; opacity:.7; }
+.footer { text-align:center; padding: 16px; font-size:12px; opacity:.7; }
+
+/* Lightbox (전체 보기) */
+.lightbox { position: fixed; inset: 0; display: none; place-items: center; background: color-mix(in oklab, black 70%, transparent); }
+.lightbox.open { display: grid; }
+.lightbox img { max-width: 95vw; max-height: 85vh; border-radius: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
+.close { position: fixed; top: 12px; right: 12px; background: #000; color:#fff; border:none; border-radius:10px; padding:8px 10px; opacity:.75; cursor:pointer; }
+
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <h1>동호회 소식지 뷰어 (JSON 기반 목록 → 전체 이미지)</h1>
+    </div>
+  </header>  <main class="wrap viewer">
+    <div class="stage" id="stage" hidden>
+      <img id="mainImg" alt="선택된 소식지" />
+      <div id="caption" class="caption"></div>
+    </div><div id="empty" class="empty">목록을 불러오는 중…</div>
+<div id="list" class="list" hidden></div>
+
+  </main>  <div id="lightbox" class="lightbox" aria-hidden="true">
+    <button class="close" aria-label="닫기">닫기 ✕</button>
+    <img id="lightImg" alt="전체 보기" />
+  </div>  <div class="footer">images/ 폴더의 JSON들을 읽어 <code>created_at</code> 역순으로 리스트를 만들고, 클릭 시 원본 이미지를 전체로 보여줍니다.</div>  <script>
+    // 🔧 레포 설정: 본인 값으로 교체하세요
+    const CONFIG = {
+      owner: "your-username",   // GitHub 사용자/조직명
+      repo: "your-repo",        // 레포 이름
+      branch: "main",           // main 또는 gh-pages 등
+      imageDir: "images",       // JSON이 들어있는 폴더(원본 이미지도 이 폴더에 있다고 가정)
+      thumbDir: "images/thumbnails", // 썸네일 폴더 (thumb_*.ext)
+      cacheMinutes: 10
+    };
+
+    const $ = (s) => document.querySelector(s);
+    const listEl = $('#list');
+    const empty = $('#empty');
+    const stage = $('#stage');
+    const mainImg = $('#mainImg');
+    const caption = $('#caption');
+
+    const lb = { el: $('#lightbox'), img: $('#lightImg') };
+    document.querySelector('.close').addEventListener('click', () => closeLightbox());
+    lb.el.addEventListener('click', (e) => { if (e.target === lb.el) closeLightbox(); });
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeLightbox(); });
+
+    function openLightbox(src){ lb.img.src = src; lb.el.classList.add('open'); lb.el.setAttribute('aria-hidden','false'); }
+    function closeLightbox(){ lb.el.classList.remove('open'); lb.el.setAttribute('aria-hidden','true'); lb.img.src = ''; }
+
+    // Helpers
+    const apiDir = (dir) => `https://api.github.com/repos/${CONFIG.owner}/${CONFIG.repo}/contents/${encodeURIComponent(dir)}?ref=${CONFIG.branch}`;
+    const rawUrl = (path) => `https://raw.githubusercontent.com/${CONFIG.owner}/${CONFIG.repo}/${CONFIG.branch}/${path}`;
+
+    async function fetchJsonFiles(){
+      const res = await fetch(apiDir(CONFIG.imageDir), { headers: { 'Accept': 'application/vnd.github+json' }});
+      if (!res.ok) throw new Error('디렉토리 목록을 불러오지 못했습니다.');
+      const data = await res.json();
+      const jsons = data.filter(x => x.type === 'file' && /\.json$/i.test(x.name));
+      // 각 JSON의 download_url로 원본 JSON을 가져옵니다.
+      const entries = await Promise.all(jsons.map(async (f)=>{
+        try {
+          const jr = await fetch(f.download_url, { cache: 'no-store' });
+          if (!jr.ok) return null;
+          const j = await jr.json();
+          // JSON 스키마: article_title, newspaper_name, date_str, article_content, image_filename, created_at
+          const thumbName = j.image_filename; // thumb_ 접두어 포함된 썸네일 파일명
+          const fullName = (thumbName || '').replace(/^thumb_/i, '');
+          return {
+            ...j,
+            _json_name: f.name,
+            thumb_url: rawUrl(`${CONFIG.thumbDir}/${thumbName}`),
+            full_url: rawUrl(`${CONFIG.imageDir}/${fullName}`)
+          };
+        } catch { return null; }
+      }));
+      return entries.filter(Boolean);
+    }
+
+    function sortByCreatedAtDesc(arr){
+      return [...arr].sort((a,b)=>{
+        const da = Date.parse(a.created_at || a.date_str || '1970-01-01');
+        const db = Date.parse(b.created_at || b.date_str || '1970-01-01');
+        return db - da; // 내림차순
+      });
+    }
+
+    function saveCache(items){
+      const key = `gh-news-json::${CONFIG.owner}/${CONFIG.repo}/${CONFIG.imageDir}`;
+      localStorage.setItem(key, JSON.stringify({ at: Date.now(), items }));
+    }
+    function loadCache(){
+      const key = `gh-news-json::${CONFIG.owner}/${CONFIG.repo}/${CONFIG.imageDir}`;
+      const raw = localStorage.getItem(key);
+      if (!raw) return null;
+      try {
+        const obj = JSON.parse(raw);
+        if ((Date.now() - obj.at) < CONFIG.cacheMinutes*60*1000) return obj.items;
+      } catch {}
+      return null;
+    }
+
+    function renderList(items){
+      listEl.innerHTML = '';
+      if (!items.length){ empty.hidden = false; empty.textContent = '표시할 항목이 없습니다.'; listEl.hidden = true; return; }
+      empty.hidden = true; listEl.hidden = false;
+
+      const frag = document.createDocumentFragment();
+      items.forEach((it)=>{
+        const row = document.createElement('div');
+        row.className = 'item';
+        row.innerHTML = `
+          <div class="thumb"><img loading="lazy" decoding="async" src="${it.thumb_url}" alt="${it.article_title || it._json_name}"></div>
+          <div class="meta">
+            <div class="title">${escapeHtml(it.article_title || '(제목 없음)')}</div>
+            <div class="sub">${escapeHtml(it.newspaper_name || '')} · ${escapeHtml(it.date_str || '')}</div>
+          </div>
+          <button class="openbtn" type="button">보기</button>
+        `;
+        row.addEventListener('click', (e)=>{
+          if (e.target.closest('.openbtn') || e.currentTarget === row){
+            showStage(it);
+          }
+        });
+        frag.appendChild(row);
+      });
+      listEl.appendChild(frag);
+    }
+
+    function showStage(it){
+      stage.hidden = false;
+      mainImg.src = it.full_url;
+      mainImg.alt = it.article_title || '';
+      caption.textContent = it.article_title || '';
+      // 전체 보기(클릭 시 라이트박스)
+      mainImg.onclick = () => openLightbox(it.full_url);
+    }
+
+    function escapeHtml(s){
+      return String(s || '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m]));
+    }
+
+    async function boot(){
+      empty.hidden = false; empty.textContent = '목록을 불러오는 중…';
+      const cached = loadCache();
+      if (cached){ renderList(cached); return; }
+      try {
+        const raw = await fetchJsonFiles();
+        const items = sortByCreatedAtDesc(raw);
+        saveCache(items);
+        renderList(items);
+      } catch(e){
+        empty.hidden = false; empty.textContent = e.message || '로딩 실패';
+      }
+    }
+
+    boot();
+  </script></body>
+</html>
