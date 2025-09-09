@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>기사 보기 | NOVATO TIMES</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", sans-serif; }
+    .wrap { max-width: 1100px; margin: 0 auto; padding: 16px; }
+    header { position: sticky; top:0; z-index: 10; backdrop-filter: blur(6px);
+             background: color-mix(in oklab, Canvas, CanvasText 6%/10%);
+             border-bottom: 1px solid color-mix(in oklab, CanvasText 25%, transparent); }
+    header .brand { font-size: 28px; font-weight: 800; letter-spacing: 1.5px;
+                    font-family: "Times New Roman", Georgia, serif; text-align: left; margin:0; }
+    .date-line { text-align: right; opacity: .8; margin-top: 6px; }
+    hr { border: 0; border-top: 1px solid color-mix(in oklab, CanvasText 25%, transparent); margin: 14px 0 18px; }
+
+    .hero { display: grid; place-items: center; margin: 8px 0 18px; }
+    .hero img { max-width: 100%; height: auto; border-radius: 6px;
+                border: 1px solid color-mix(in oklab, CanvasText 20%, transparent); }
+
+    article { line-height: 1.65; font-size: 16px; }
+    article p { margin: 0 0 14px; white-space: pre-wrap; }
+    .back { display:inline-block; margin: 12px 0 4px; font-size:14px; opacity:.8; text-decoration:none; }
+    .missing { padding: 10px; border: 1px dashed color-mix(in oklab, CanvasText 40%, transparent); border-radius: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap">
+      <a href="./" class="back">← 목록으로</a>
+      <h1 id="newspaperName" class="brand">NEWSPAPER</h1>
+      <div id="dateStr" class="date-line"></div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <hr />
+    <div id="hero" class="hero"></div>
+    <article id="content"></article>
+  </main>
+
+  <script>
+    // ⚙️ 레포 구성 (index.html과 동일하게 맞추세요)
+    const CONFIG = {
+      owner: "jcwon989",
+      repo: "release",
+      branch: "main",
+      jsonDir: "images",   // JSON 파일 폴더
+      uploadDir: "upload", // 원본 업로드 이미지 폴더
+      imageDir: "images"   // (폴백용) 기존 생성 이미지 폴더
+    };
+
+    // 유틸: 경로 세그먼트 안전 인코딩 후 raw.githubusercontent URL 생성
+    function rawUrl(path) {
+      const parts = String(path).split('/').map(seg => encodeURIComponent(seg));
+      return `https://raw.githubusercontent.com/${CONFIG.owner}/${CONFIG.repo}/${CONFIG.branch}/${parts.join('/')}`;
+    }
+    function escapeHtml(s){
+      return String(s || '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;','\'':'&#39;'}[m] || m));
+    }
+    function getQueryParam(name){
+      const u = new URL(location.href);
+      return u.searchParams.get(name);
+    }
+
+    async function loadJson(jsonName){
+      // e.g. generated_newspaper_desktop_20250826_160639.json
+      const url = rawUrl(`${CONFIG.jsonDir}/${jsonName}`);
+      const r = await fetch(url, { cache: "no-store" });
+      if (!r.ok) throw new Error("기사를 불러올 수 없습니다.");
+      return r.json();
+    }
+
+    // 업로드 원본 이미지 경로 만들기:
+    // image_filename이 "generated_..."라면 접두사만 "upload_"로 치환하여 upload 폴더에서 찾음.
+    function buildUploadImagePath(imageFilename){
+      if (!imageFilename) return null;
+      const uploadName = imageFilename.replace(/^generated_/, "uploaded_");
+      return `${CONFIG.uploadDir}/${uploadName}`;
+    }
+
+    async function showArticle(){
+      const jsonName = getQueryParam("j");
+      if (!jsonName){
+        document.querySelector("#content").innerHTML =
+          '<div class="missing">잘못된 접근입니다. 목록에서 기사를 다시 선택해주세요.</div>';
+        return;
+      }
+
+      try {
+        const data = await loadJson(jsonName);
+        // 필수 필드 렌더
+        document.querySelector("#newspaperName").textContent = data.newspaper_name || "NEWSPAPER";
+        document.querySelector("#dateStr").textContent = data.date_str || "";
+
+        // 이미지: upload/의 원본을 최우선 시도, 실패 시 images/의 생성 이미지를 폴백
+        const hero = document.querySelector("#hero");
+        const originalUploadPath = buildUploadImagePath(data.image_filename || "");
+        const generatedPath = data.image_filename ? `${CONFIG.imageDir}/${data.image_filename}` : null;
+
+        if (originalUploadPath) {
+          const img = new Image();
+          img.loading = "lazy";
+          img.decoding = "async";
+
+          // 업로드 이미지 URL 우선
+          img.src = rawUrl(originalUploadPath);
+
+          // 업로드 이미지가 없을 경우 → 생성 이미지로 폴백
+          img.onerror = () => {
+            if (generatedPath) img.src = rawUrl(generatedPath);
+          };
+
+          img.alt = (data.article_title || "기사 이미지");
+          hero.appendChild(img);
+        }
+
+        // 본문
+        const contentEl = document.querySelector("#content");
+        const text = String(data.article_content || "").trim();
+        if (text) {
+          // JSON 내 개행(\n)을 유지해 문단처럼 보이게 렌더
+          // (white-space: pre-wrap; 로 처리되므로 그대로 삽입하면 됩니다)
+          contentEl.textContent = text;
+        } else {
+          contentEl.innerHTML = '<div class="missing">본문이 비어 있습니다.</div>';
+        }
+      } catch (e) {
+        document.querySelector("#content").innerHTML =
+          `<div class="missing">로드 오류: ${escapeHtml(e.message || "불러오기 실패")}</div>`;
+      }
+    }
+
+    showArticle();
+  </script>
+</body>
+</html>
