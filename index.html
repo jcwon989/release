@@ -230,19 +230,19 @@
         const imgEl = row.querySelector('img');
         imgEl.addEventListener('error', () => { imgEl.src = it.full_url; }, { once: true });
 
-        // 1) 버튼 클릭 → 라이트박스(기존 원본 이미지 미리보기)
+        // 버튼 클릭 → 기존 라이트박스(이미지 확대)
         const btn = row.querySelector('.openbtn');
         btn.addEventListener('click', (e) => {
-          e.stopPropagation();      // 행 클릭으로 전파 방지
-          e.preventDefault();       // 폼 내부일 가능성 대비
+          e.stopPropagation();
+          e.preventDefault();
           const metaText = [it.article_title, it.newspaper_name, it.date_str].filter(Boolean).join(' · ');
           openLightbox(it.full_url, metaText);
         });
 
-        // 2) 카드(행) 클릭 → article.html로 이동(웹신문 상세)
+        // 카드(행) 클릭 → article.html로 이동(웹신문 상세)
         row.addEventListener('click', (e) => {
           if (!e.target.closest('.openbtn')) {
-            const jsonName = it._json_name; // 예: generated_newspaper_....json
+            const jsonName = it._json_name;
             if (!jsonName) return;
             window.location.href = `article.html?j=${encodeURIComponent(jsonName)}`;
           }
