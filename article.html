@@ -16,9 +16,10 @@
                     font-family: "Times New Roman", Georgia, serif; text-align: left; margin:0; }
     .date-line { text-align: right; opacity: .8; margin-top: 6px; }
     hr { border: 0; border-top: 1px solid color-mix(in oklab, CanvasText 25%, transparent); margin: 14px 0 18px; }
-    .hero { display: grid; place-items: center; margin: 8px 0 18px; }
+    .hero { display: grid; place-items: center; margin: 8px 0 6px; }
     .hero img { max-width: 100%; height: auto; border-radius: 6px;
                 border: 1px solid color-mix(in oklab, CanvasText 20%, transparent); }
+    .caption { text-align:center; font-size: 12px; opacity:.75; margin: 6px 0 18px; }
     article { line-height: 1.65; font-size: 16px; }
     article p { margin: 0 0 14px; white-space: pre-wrap; }
     .back { display:inline-block; margin: 12px 0 4px; font-size:14px; opacity:.8; text-decoration:none; }
@@ -33,25 +34,24 @@
       <div id="dateStr" class="date-line"></div>
     </div>
   </header>
-
   <main class="wrap">
     <hr />
     <div id="hero" class="hero"></div>
+    <div id="caption" class="caption"></div>
     <article id="content"></article>
   </main>
-
   <script>
-    // ⚙️ 레포 구성 (index.html과 동일하게 맞추세요)
+    // ⚙️ 레포 구성
     const CONFIG = {
       owner: "jcwon989",
       repo: "release",
       branch: "main",
-      jsonDir: "images",   // JSON 파일 폴더
-      uploadDir: "images/upload", // 원본 업로드 이미지 폴더, 
-      imageDir: "images"   // (폴백용) 기존 생성 이미지 폴더
+      jsonDir: "images",           // JSON 파일 폴더
+      uploadDir: "images/upload",  // 업로드 원본 이미지 폴더
+      imageDir: "images"           // 생성 이미지 폴더
     };
 
-    // 기본 이미지: 별도 파일 없이 동작하도록 데이터 URI 사용
+    // 기본 이미지 (데이터 URI)
     const DEFAULT_IMAGE =
       'data:image/svg+xml;utf8,'
       + '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="675">'
@@ -61,7 +61,7 @@
       + ' font-size="28" fill="%2399a1a8">이미지를 불러올 수 없습니다</text>'
       + '</svg>';
 
-    // 유틸: 경로 세그먼트 안전 인코딩 후 raw.githubusercontent URL 생성
+    // raw.githubusercontent 경로 생성
     function rawUrl(path) {
       const parts = String(path).split('/').map(seg => encodeURIComponent(seg));
       return `https://raw.githubusercontent.com/${CONFIG.owner}/${CONFIG.repo}/${CONFIG.branch}/${parts.join('/')}`;
@@ -79,19 +79,26 @@
     }
 
     async function loadJson(jsonName){
-      // 예: generated_newspaper_desktop_20250826_160639.json
       const url = rawUrl(`${CONFIG.jsonDir}/${jsonName}`);
       const r = await fetch(url, { cache: "no-store" });
       if (!r.ok) throw new Error("기사를 불러올 수 없습니다.");
       return r.json();
     }
 
-    // 업로드 원본 이미지 경로 만들기:
-    // image_filename이 "generated_..." 라면 업로드 원본은 "uploaded_..." 로 가정 (upload/ 폴더)
-    function buildUploadImagePath(filename) {
-      if (!filename) return null;
-      const uploadName = filename.replace(/^generated_/, 'uploaded_');
-      return `${CONFIG.uploadDir}/${uploadName}`;
+    // ✅ JSON을 그대로 신뢰해 경로를 만든다 (치환/유추 금지)
+    function getImagePathsFromJson(data) {
+      const generatedName = data.image_filename || null;
+      const thumbName     = data.thumbnail_filename || null;
+      const uploadedObj   = data.uploaded_image || null;
+
+      const uploadPath    = (uploadedObj && uploadedObj.archive_filename)
+                            ? `${CONFIG.uploadDir}/${uploadedObj.archive_filename}`
+                            : null;
+
+      const generatedPath = generatedName ? `${CONFIG.imageDir}/${generatedName}` : null;
+      const thumbPath     = thumbName ? `${CONFIG.imageDir}/thumbnails/${thumbName}` : null;
+
+      return { uploadPath, generatedPath, thumbPath };
     }
 
     async function showArticle(){
@@ -101,49 +108,60 @@
           '<div class="missing">잘못된 접근입니다. 목록에서 기사를 다시 선택해주세요.</div>';
         return;
       }
+
       try {
         const data = await loadJson(jsonName);
 
-        // 헤더 렌더
+        // 헤더
         document.querySelector("#newspaperName").textContent = data.newspaper_name || "NEWSPAPER";
         document.querySelector("#dateStr").textContent = data.date_str || "";
 
-        // ---------- 이미지: upload(업로드 원본) → images(생성) → 기본 ----------
-        const hero = document.querySelector("#hero");
-        const uploadPath    = buildUploadImagePath(data.image_filename || "");
-        const generatedPath = data.image_filename ? `${CONFIG.imageDir}/${data.image_filename}` : null;
+        // 이미지 경로 확보 (치환 없이 JSON 값 사용)
+        const { uploadPath, generatedPath } = getImagePathsFromJson(data);
 
+        const hero = document.querySelector("#hero");
         const img = new Image();
         img.loading  = "lazy";
         img.decoding = "async";
         img.alt      = (data.article_title || "기사 이미지");
 
-        if (uploadPath) {
-          img.src = rawUrl(uploadPath);
-          img.onerror = function handleUploadErr(){
-            img.onerror = null;
-            if (generatedPath) {
-              img.src = rawUrl(generatedPath);
-              img.onerror = function handleGenErr(){
-                img.onerror = null;
+        // 로드 우선순위: 업로드 원본 → 생성 이미지 → 기본 이미지
+        function setFallbackChain() {
+          if (uploadPath) {
+            img.src = rawUrl(uploadPath);
+            img.onerror = function handleUploadErr(){
+              img.onerror = null;
+              if (generatedPath) {
+                img.src = rawUrl(generatedPath);
+                img.onerror = function handleGenErr(){
+                  img.onerror = null;
+                  img.src = DEFAULT_IMAGE;
+                };
+              } else {
                 img.src = DEFAULT_IMAGE;
-              };
-            } else {
-              img.src = DEFAULT_IMAGE;
-            }
-          };
-        } else {
-          if (generatedPath) {
+              }
+            };
+          } else if (generatedPath) {
             img.src = rawUrl(generatedPath);
-            img.onerror = ()=>{ img.src = DEFAULT_IMAGE; };
+            img.onerror = function handleGenErr(){
+              img.onerror = null;
+              img.src = DEFAULT_IMAGE;
+            };
           } else {
             img.src = DEFAULT_IMAGE;
           }
         }
+        setFallbackChain();
+
         hero.innerHTML = "";
         hero.appendChild(img);
 
-        // ---------- 본문: 개행(\n) → <br> ----------
+        // 캡션
+        const captionEl = document.querySelector("#caption");
+        const cap = String(data.article_image_caption || "").trim();
+        captionEl.textContent = cap ? cap : "";
+
+        // 본문
         const contentEl = document.querySelector("#content");
         const text = String(data.article_content || "").trim();
         if (text) {
@@ -152,7 +170,6 @@
         } else {
           contentEl.innerHTML = '<div class="missing">본문이 비어 있습니다.</div>';
         }
-
       } catch (e) {
         document.querySelector("#content").innerHTML =
           `<div class="missing">로드 오류: ${escapeHtml(e.message || "불러오기 실패")}</div>`;
